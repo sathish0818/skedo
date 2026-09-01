@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation'
 import { attendees, getWorkshop } from '@/lib/mock'
 import { ButtonLink, Callout, Card, Eyebrow, PageHeader } from '@/components/ui'
 import { Preflight } from '@/components/preflight'
+import { CameraCheck } from '@/components/camera-check'
 import { formatTime, joinOpensAt } from '@/lib/format'
 import { SESSION } from '@/lib/rules'
 
@@ -26,19 +27,7 @@ export default async function GreenRoomPage({ params }: { params: Promise<{ slug
 
       <div className="mt-6 grid gap-5 lg:grid-cols-2">
         <div className="flex flex-col gap-4">
-          <Card className="overflow-hidden">
-            <div className="flex aspect-video items-center justify-center bg-ink text-sm text-surface/50">
-              Your camera preview
-            </div>
-            <div className="flex flex-wrap gap-2 p-3">
-              <ButtonLink href="#" size="sm" variant="secondary">
-                Switch camera
-              </ButtonLink>
-              <ButtonLink href="#" size="sm" variant="secondary">
-                Test screen share
-              </ButtonLink>
-            </div>
-          </Card>
+          <CameraCheck />
           <Preflight />
         </div>
 

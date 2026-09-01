@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Badge, Button, Input, cn } from './ui'
+import { VideoPreview, useMedia } from './media'
 import { clock } from '@/lib/format'
 import { SESSION } from '@/lib/rules'
 import type { MockQuestion } from '@/lib/mock'
@@ -45,6 +46,8 @@ export function LiveRoom({
   const [handUp, setHandUp] = useState(false)
   const [audioOnly, setAudioOnly] = useState(false)
   const [questions, setQuestions] = useState(initialQuestions)
+  // The tutor is the only camera in Skedo; learners join with cameras off.
+  const selfCam = useMedia({ video: true })
 
   useEffect(() => {
     const id = setInterval(() => setElapsed((e) => e + 1), 1000)
@@ -94,37 +97,60 @@ export function LiveRoom({
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <main className="relative flex min-h-0 flex-1 flex-col">
-          <div className="relative flex flex-1 items-center justify-center bg-black/40">
-            {audioOnly ? (
-              <div className="flex flex-col items-center gap-2 text-surface/60">
-                <span className="flex size-14 items-center justify-center rounded-full border border-surface/20">
-                  ♪
-                </span>
-                <p className="text-sm">Audio only — saving data</p>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center gap-2 text-surface/40">
-                <p className="font-mono text-xs uppercase tracking-widest">Shared screen</p>
-                <p className="text-sm">{tutorName} is presenting</p>
-              </div>
-            )}
+          {/* The shared screen is 16:9, so the stage is too. Letting it fill an
+              ultrawide window leaves a huge empty void and letterboxes the real
+              video awkwardly once it arrives. */}
+          <div className="flex min-h-0 flex-1 items-center justify-center p-2 sm:p-4">
+            <div className="relative flex aspect-video max-h-full w-full max-w-5xl items-center justify-center overflow-hidden rounded-card bg-black/50 ring-1 ring-surface/10">
+              {audioOnly ? (
+                <div className="flex flex-col items-center gap-2 text-surface/60">
+                  <span className="flex size-14 items-center justify-center rounded-full border border-surface/20">
+                    ♪
+                  </span>
+                  <p className="text-sm">Audio only — saving data</p>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-2 px-6 text-center text-surface/40">
+                  <p className="font-mono text-xs uppercase tracking-widest">Shared screen</p>
+                  <p className="text-sm">{tutorName} is presenting</p>
+                  <p className="max-w-[36ch] text-xs text-surface/25">
+                    Placeholder — live video needs a media server, which is not wired up yet.
+                  </p>
+                </div>
+              )}
 
-            {/* Watermarked with the viewer's own email. Traceable, not preventive. */}
-            <p
-              aria-hidden
-              className="pointer-events-none absolute top-3 right-3 rounded bg-black/40 px-2 py-1 font-mono text-[0.6rem] text-surface/50"
-            >
-              {learnerEmail}
-            </p>
+              {/* Watermarked with the viewer's own email. Traceable, not preventive. */}
+              <p
+                aria-hidden
+                className="pointer-events-none absolute top-3 right-3 rounded bg-black/40 px-2 py-1 font-mono text-[0.6rem] text-surface/50"
+              >
+                {learnerEmail}
+              </p>
 
-            <div className="absolute right-3 bottom-3 flex h-20 w-28 items-center justify-center rounded-card border border-surface/15 bg-surface/10 text-xs text-surface/60 sm:h-24 sm:w-36">
-              {tutorName.split(' ')[0]}
+              {/* Self view. Real camera for the host, a name plate for learners. */}
+              <div className="absolute right-3 bottom-3 h-20 w-28 overflow-hidden rounded-card border border-surface/15 bg-surface/10 sm:h-24 sm:w-36">
+                {host && selfCam.status === 'ready' ? (
+                  <VideoPreview stream={selfCam.stream} />
+                ) : (
+                  <div className="flex size-full flex-col items-center justify-center gap-1 text-center text-xs text-surface/60">
+                    <span>{tutorName.split(' ')[0]}</span>
+                    {host && (
+                      <button
+                        onClick={() => void selfCam.start()}
+                        className="text-[0.6rem] text-brand underline"
+                      >
+                        {selfCam.status === 'idle' ? 'turn on camera' : 'retry'}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Portrait phones only: the shared screen is unreadable this way. */}
+              <p className="absolute inset-x-4 bottom-3 rounded-card bg-black/60 px-3 py-2 text-center text-xs text-surface/80 portrait:block landscape:hidden sm:hidden">
+                Rotate your phone for a readable view of the shared screen.
+              </p>
             </div>
-
-            {/* Portrait phones only: the shared screen is unreadable this way. */}
-            <p className="absolute inset-x-4 bottom-3 rounded-card bg-black/60 px-3 py-2 text-center text-xs text-surface/80 portrait:block landscape:hidden sm:hidden">
-              Rotate your phone for a readable view of the shared screen.
-            </p>
           </div>
 
         </main>
@@ -218,6 +244,14 @@ export function LiveRoom({
         <div className="pb-safe flex shrink-0 items-center gap-2 border-t border-surface/10 px-3 py-2.5">
           {host ? (
             <>
+              <Button
+                size="sm"
+                variant="secondary"
+                className="border-surface/20 bg-surface/10 text-surface"
+                onClick={() => (selfCam.status === 'ready' ? selfCam.stop() : void selfCam.start())}
+              >
+                {selfCam.status === 'ready' ? 'Camera on' : 'Turn on camera'}
+              </Button>
               <Button size="sm" variant="secondary" className="border-surface/20 bg-surface/10 text-surface">
                 Share screen
               </Button>
