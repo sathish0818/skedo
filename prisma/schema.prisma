@@ -1,0 +1,713 @@
+// Skedo — paid 1-hour live workshops, sold and certified end to end.
+//
+// Design rules encoded here, so they can't drift:
+//   1. All money is an integer count of paise. Never a float, never rupees.
+//   2. Commission is basis points (2000 = 20%) with an absolute cap, stored per
+//      product so pilots, promos and org deals need no code change.
+//   3. Seats are PRE-CREATED per session and claimed with a single atomic
+//      UPDATE ... WHERE status = 'AVAILABLE'. That makes the 20th-seat race
+//      impossible rather than merely unlikely.
+//   4. A Seat does not require an Order. That is what lets a college buy 60
+//      seats on an invoice, and what lets the pilot confirm seats by hand.
+//   5. Product.kind exists so recordings and bundles slot in later without a
+//      rewrite. Phase 1 only ever writes LIVE_SESSION.
+//   6. Organization is the multi-tenant hook for white-label. Unused in phase 1
+//      and intentionally nullable everywhere.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Prisma 7 keeps the connection URL out of the schema: migrations read it from
+// prisma.config.ts, the client gets it through the pg driver adapter.
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Identity — Auth.js (email magic link) + our own fields
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
+  name          String?
+  image         String?
+
+  // Captured at checkout for WhatsApp reminders. E.164, e.g. +919876543210.
+  phone         String?
+  phoneVerified DateTime?
+
+  isAdmin       Boolean   @default(false)
+
+  accounts      Account[]
+  sessions      Session[]
+  tutorProfile  TutorProfile?
+  seats         Seat[]
+  orders        Order[]
+  enrollments   Enrollment[]
+  certificates  Certificate[]
+  questions     Question[]
+  chatMessages  ChatMessage[]
+  ratings       Rating[]
+  waitlist      WaitlistEntry[]
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+/// Auth.js browser session. Not to be confused with LiveSession, which is a workshop.
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ---------------------------------------------------------------------------
+// Organization — white-label hook. Nullable everywhere; empty in phase 1.
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id       String  @id @default(cuid())
+  name     String
+  slug     String  @unique
+
+  // Branding, for when a tenant runs Skedo under their own name.
+  logoUrl      String?
+  accentColor  String?
+  customDomain String? @unique
+  emailFromName String?
+
+  /// Overrides Product.commissionRateBps for everything this org owns.
+  commissionRateBps Int?
+  /// Flat monthly fee in paise, for org billing. Null = commission only.
+  monthlyFeePaise   Int?
+
+  tutors   TutorProfile[]
+  products Product[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Tutor
+// ---------------------------------------------------------------------------
+
+enum VerificationStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+model TutorProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Public handle: skedo.in/@handle
+  handle    String  @unique
+  headline  String?
+  bio       String?
+  skills    String[] @default([])
+  photoUrl  String?
+  /// Free-form: { linkedin, instagram, x, youtube, website }
+  socialLinks Json?
+  /// Shown on certificates as the issuing tutor's credential.
+  credential  String?
+
+  // Phase 3. A tutor may publish free workshops while UNVERIFIED; taking money
+  // on the open platform requires VERIFIED.
+  verificationStatus VerificationStatus @default(UNVERIFIED)
+  verifiedAt         DateTime?
+  /// Razorpay Route sub-merchant id. Never store raw bank details.
+  payoutAccountRef   String?
+
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+
+  products Product[]
+  payouts  Payout[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+}
+
+// ---------------------------------------------------------------------------
+// Product — the sellable thing. Phase 1 only ever LIVE_SESSION.
+// ---------------------------------------------------------------------------
+
+enum ProductKind {
+  LIVE_SESSION
+  RECORDING
+  BUNDLE
+}
+
+enum ProductStatus {
+  DRAFT
+  PUBLISHED
+  CANCELLED
+  COMPLETED
+}
+
+model Product {
+  id     String        @id @default(cuid())
+  kind   ProductKind   @default(LIVE_SESSION)
+  status ProductStatus @default(DRAFT)
+
+  title       String
+  slug        String  @unique
+  summary     String?
+  description String?
+  coverUrl    String?
+
+  // Structured fields. Mandatory at publish time, because vague listings are
+  // the documented root of refund requests.
+  whoFor            String?
+  prerequisites     String?
+  /// Free text, not an enum — any language is allowed.
+  language          String   @default("English")
+  recommendedDevice String?
+  agenda            String?
+
+  /// 0 = free. Minimum paid price is enforced in app code (₹49 = 4900 paise).
+  pricePaise Int    @default(0)
+  currency   String @default("INR")
+
+  /// 2000 = 20%. Org override wins if set.
+  commissionRateBps  Int  @default(2000)
+  /// Absolute ceiling on commission per session, in paise. Null = uncapped.
+  commissionCapPaise Int? @default(250000)
+
+  /// Minutes present required for a certificate. 42 of 60 by default.
+  certificateThresholdMinutes Int @default(42)
+  /// How long a buyer can watch the recording after the session.
+  recordingAccessDays         Int @default(30)
+  /// Overrides the default certificate design for this product.
+  certificateTemplate         String?
+
+  tutorId String
+  tutor   TutorProfile @relation(fields: [tutorId], references: [id])
+
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+
+  liveSession  LiveSession?
+  enrollments  Enrollment[]
+  certificates Certificate[]
+
+  publishedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, kind])
+  @@index([tutorId])
+  @@index([organizationId])
+}
+
+// ---------------------------------------------------------------------------
+// LiveSession — one scheduled run of a workshop
+// ---------------------------------------------------------------------------
+
+enum LiveSessionStatus {
+  SCHEDULED
+  /// Under-filled and moved one week out. Buyers were asked to confirm or refund.
+  DEFERRED
+  LIVE
+  COMPLETED
+  /// Tutor cancelled. Buyers refunded, payout withheld.
+  CANCELLED
+  /// Tutor dropped mid-session and did not return. Needs admin review.
+  ABANDONED
+  /// Failed to fill twice. All seats refunded automatically.
+  EXPIRED
+}
+
+model LiveSession {
+  id        String @id @default(cuid())
+  productId String @unique
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  status LiveSessionStatus @default(SCHEDULED)
+
+  scheduledStartAt DateTime
+  timezone         String @default("Asia/Kolkata")
+  /// 40 demo + 20 Q&A.
+  demoMinutes      Int    @default(40)
+  qaMinutes        Int    @default(20)
+
+  maxSeats Int @default(20)
+  /// Below this the session moves a week instead of running.
+  minSeats Int @default(5)
+
+  deferralCount Int @default(0)
+  maxDeferrals  Int @default(1)
+
+  /// 100ms room id.
+  roomRef      String?
+  recordingRef String?
+  recordingReadyAt DateTime?
+
+  startedAt DateTime?
+  endedAt   DateTime?
+  /// Set when the tutor's connection is lost long enough to abandon the session.
+  tutorLastSeenAt DateTime?
+
+  seats            Seat[]
+  questions        Question[]
+  chatMessages     ChatMessage[]
+  attendanceEvents AttendanceEvent[]
+  waitlist         WaitlistEntry[]
+  payout           Payout?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, scheduledStartAt])
+}
+
+// ---------------------------------------------------------------------------
+// Seat — pre-created, claimed atomically, independent of payment
+// ---------------------------------------------------------------------------
+
+enum SeatStatus {
+  /// Pre-created and unclaimed.
+  AVAILABLE
+  /// Reserved while checkout completes. Expires and returns to AVAILABLE.
+  HELD
+  CONFIRMED
+  CANCELLED
+  REFUNDED
+}
+
+enum SeatSource {
+  PAYMENT
+  /// Admin confirmed by hand — pilot QR payments.
+  MANUAL
+  /// Allocated from an invoiced block, e.g. a college buying 60 seats.
+  BULK
+  /// Free workshop.
+  FREE
+}
+
+model Seat {
+  id            String @id @default(cuid())
+  liveSessionId String
+  liveSession   LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+
+  /// Stable 1..maxSeats label, useful for support ("seat 14 never joined").
+  number Int
+
+  status SeatStatus @default(AVAILABLE)
+  source SeatSource @default(PAYMENT)
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  /// Denormalised on purpose: the certificate must reach the address that paid,
+  /// even if the user later changes their account email.
+  learnerEmail String?
+  learnerPhone String?
+
+  holdExpiresAt DateTime?
+  confirmedAt   DateTime?
+
+  orderId String? @unique
+  order   Order?  @relation(fields: [orderId], references: [id])
+
+  /// Did they tap "I'm coming" on the T-24h reminder?
+  attendanceConfirmedAt DateTime?
+  /// Computed from AttendanceEvent after the session ends.
+  minutesPresent        Int      @default(0)
+
+  joinGrant        JoinGrant?
+  certificate      Certificate?
+  rating           Rating?
+  attendanceEvents AttendanceEvent[]
+  notifications    NotificationLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([liveSessionId, number])
+  // The claim query filters on exactly this pair.
+  @@index([liveSessionId, status])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Money in
+// ---------------------------------------------------------------------------
+
+enum OrderStatus {
+  CREATED
+  PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+model Order {
+  id     String      @id @default(cuid())
+  status OrderStatus @default(CREATED)
+
+  amountPaise Int
+  currency    String @default("INR")
+
+  /// "razorpay" | "manual"
+  provider          String  @default("razorpay")
+  providerOrderId   String?
+  providerPaymentId String?
+  /// "upi" — cards and netbanking are switched off at checkout.
+  method            String?
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  /// Captured at checkout. The certificate goes here, so it must be verified.
+  learnerEmail String
+  learnerPhone String?
+
+  seat    Seat?
+  refunds Refund[]
+
+  paidAt    DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([provider, providerOrderId])
+  @@index([status])
+}
+
+model Refund {
+  id      String @id @default(cuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id])
+
+  amountPaise Int
+  /// LEARNER_CANCELLED | SESSION_EXPIRED | TUTOR_CANCELLED | DEFERRAL_DECLINED | ADMIN
+  reason      String
+  providerRefundId String?
+  status      String @default("PENDING")
+
+  createdAt DateTime @default(now())
+  processedAt DateTime?
+
+  @@index([orderId])
+}
+
+/// Every webhook we receive, stored before it is acted on. The unique key makes
+/// duplicate delivery — which Razorpay does, by design — a no-op.
+model WebhookEvent {
+  id         String   @id @default(cuid())
+  provider   String
+  eventId    String
+  eventType  String
+  payload    Json
+  receivedAt DateTime @default(now())
+  processedAt DateTime?
+  error      String?
+
+  @@unique([provider, eventId])
+  @@index([processedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Money out
+// ---------------------------------------------------------------------------
+
+enum PayoutStatus {
+  /// Default. Released only after the session completes, so a cancellation
+  /// costs the tutor and not the platform.
+  HELD
+  RELEASED
+  PAID
+  /// Session cancelled or abandoned — withheld pending review.
+  WITHHELD
+}
+
+model Payout {
+  id            String @id @default(cuid())
+  liveSessionId String @unique
+  liveSession   LiveSession @relation(fields: [liveSessionId], references: [id])
+
+  tutorId String
+  tutor   TutorProfile @relation(fields: [tutorId], references: [id])
+
+  status PayoutStatus @default(HELD)
+
+  grossPaise      Int
+  commissionPaise Int
+  /// TDS 194-O, 1% of gross.
+  tdsPaise        Int @default(0)
+  gatewayFeePaise Int @default(0)
+  netPaise        Int
+
+  /// T+2 after the session ends.
+  releaseAt DateTime?
+  paidAt    DateTime?
+  providerTransferId String?
+  note      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, releaseAt])
+  @@index([tutorId])
+}
+
+// ---------------------------------------------------------------------------
+// Access — what a learner is entitled to. Recordings and bundles reuse this.
+// ---------------------------------------------------------------------------
+
+enum EnrollmentSource {
+  SEAT
+  PURCHASE
+  BULK
+  GIFT
+}
+
+model Enrollment {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  source EnrollmentSource @default(SEAT)
+
+  grantedAt DateTime  @default(now())
+  /// Recording access window. Null = forever.
+  expiresAt DateTime?
+
+  @@unique([userId, productId])
+  @@index([expiresAt])
+}
+
+/// One row per seat. Enforces "a shared link cannot be used by a second person"
+/// as ONE ACTIVE CONNECTION rather than one join event — so a learner whose
+/// mobile network drops can come straight back in.
+model JoinGrant {
+  id     String @id @default(cuid())
+  seatId String @unique
+  seat   Seat   @relation(fields: [seatId], references: [id], onDelete: Cascade)
+
+  token String @unique
+
+  firstUsedAt DateTime?
+  /// 100ms peer id currently holding the seat. A new connection displaces it.
+  activeConnectionRef String?
+  activeSince         DateTime?
+  displacementCount   Int      @default(0)
+  revokedAt           DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// During and after the session
+// ---------------------------------------------------------------------------
+
+enum AttendanceEventType {
+  JOIN
+  LEAVE
+  /// Connection lost without a clean leave.
+  DROP
+}
+
+model AttendanceEvent {
+  id            String @id @default(cuid())
+  liveSessionId String
+  liveSession   LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+
+  seatId String?
+  seat   Seat?   @relation(fields: [seatId], references: [id], onDelete: SetNull)
+
+  /// Tutor events have no seat.
+  isTutor Boolean @default(false)
+
+  type       AttendanceEventType
+  occurredAt DateTime
+  peerRef    String?
+
+  @@index([liveSessionId, occurredAt])
+  @@index([seatId])
+}
+
+model Question {
+  id            String @id @default(cuid())
+  liveSessionId String
+  liveSession   LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  body      String
+  upvotes   Int    @default(0)
+  /// Set live by the tutor, or filled in afterwards for anything Q&A ran out
+  /// of time for — which is most of the perceived value at near-zero cost.
+  answeredAt DateTime?
+  answerBody String?
+
+  createdAt DateTime @default(now())
+
+  @@index([liveSessionId, upvotes])
+}
+
+model ChatMessage {
+  id            String @id @default(cuid())
+  liveSessionId String
+  liveSession   LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  fromTutor Boolean @default(false)
+  body      String
+  /// Tutor-posted resources: [{ label, url }]
+  attachments Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([liveSessionId, createdAt])
+}
+
+model Certificate {
+  id     String @id @default(cuid())
+  /// Public verification code — skedo.in/verify/SKD-XXXX-XXXX
+  code   String @unique
+
+  seatId String @unique
+  seat   Seat   @relation(fields: [seatId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  /// Frozen at issue time. The certificate must keep saying what it said.
+  learnerName    String
+  workshopTitle  String
+  tutorName      String
+  tutorCredential String?
+  sessionDate    DateTime
+  minutesPresent Int
+
+  pdfUrl   String?
+  issuedAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  @@index([userId])
+}
+
+model Rating {
+  id     String @id @default(cuid())
+  seatId String @unique
+  seat   Seat   @relation(fields: [seatId], references: [id], onDelete: Cascade)
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  /// 1..5
+  score   Int
+  comment String?
+
+  createdAt DateTime @default(now())
+}
+
+model WaitlistEntry {
+  id            String @id @default(cuid())
+  liveSessionId String
+  liveSession   LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  email    String
+  notifiedAt DateTime?
+  createdAt  DateTime @default(now())
+
+  @@unique([liveSessionId, email])
+}
+
+// ---------------------------------------------------------------------------
+// Notifications — the unique key makes every send idempotent, so a retried
+// job can never double-message a learner.
+// ---------------------------------------------------------------------------
+
+enum NotificationKind {
+  BOOKING_CONFIRMED
+  REMINDER_24H
+  REMINDER_1H
+  REMINDER_10M
+  SESSION_DEFERRED
+  REFUND_CONFIRMED
+  CERTIFICATE_ISSUED
+  RECORDING_READY
+  PAYOUT_SENT
+  WAITLIST_SEAT_OPEN
+}
+
+enum NotificationChannel {
+  EMAIL
+  WHATSAPP
+}
+
+model NotificationLog {
+  id     String @id @default(cuid())
+  seatId String?
+  seat   Seat?   @relation(fields: [seatId], references: [id], onDelete: Cascade)
+
+  kind    NotificationKind
+  channel NotificationChannel
+
+  toAddress  String
+  providerRef String?
+  sentAt     DateTime?
+  failedAt   DateTime?
+  error      String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([seatId, kind, channel])
+  @@index([kind, sentAt])
+}
