@@ -58,6 +58,51 @@ src/lib/rules.ts       Every product rule as a named constant.
 src/app/               Routes and pages.
 ```
 
+## Screens
+
+All 22 screens plus the 9 automated messages are built and clickable against
+sample data in `src/lib/mock.ts` — no database needed to review them.
+
+| Learner | Route |
+| --- | --- |
+| Browse | `/` |
+| Workshop sales page | `/w/figma-to-production` |
+| Checkout | `/w/figma-to-production/checkout` |
+| Payment success | `/w/figma-to-production/success` |
+| My bookings | `/bookings` |
+| Waiting room | `/join/demo-upcoming` |
+| Live room | `/join/demo-upcoming/live` |
+| Post-session rating | `/join/demo-past/rate` |
+| Certificate + public verify | `/verify/SKD-4K7P-92MX` |
+| Recording player | `/recordings/figma-to-production` |
+| Workshop chat | `/chat/figma-to-production` |
+
+| Tutor | Route |
+| --- | --- |
+| Sign up | `/signup` |
+| Profile | `/tutor/profile` |
+| Dashboard | `/tutor` |
+| Create workshop | `/tutor/workshops/new` |
+| Publish preview | `/tutor/workshops/figma-to-production/preview` |
+| Social creative | `/tutor/workshops/figma-to-production/creative` |
+| Attendee list | `/tutor/workshops/figma-to-production/attendees` |
+| Green room | `/tutor/workshops/figma-to-production/greenroom` |
+| Live room, host view | `/tutor/workshops/figma-to-production/live` |
+| Session report | `/tutor/workshops/figma-to-production/report` |
+| Public tutor page | `/@sathish` |
+
+All nine messages are previewed side by side at `/dev/messages`.
+
+### Design foundation
+
+Colour, type and spacing tokens are in `src/app/globals.css`. Deep forest green
+brand, marigold for anything scarce or urgent — Indian edtech is uniformly blue
+and purple, and green reads as trust rather than tech. Every colour is a token;
+a hard-coded hex will not follow dark mode.
+
+Reusable primitives are in `src/components/ui.tsx`. Nothing should hand-roll a
+button, badge, card, form field or seat meter.
+
 ## Rules that must not drift
 
 These are encoded in `src/lib/rules.ts` and `prisma/schema.prisma`. Changing

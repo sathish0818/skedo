@@ -1,26 +1,177 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/*
+  Skedo's visual foundation.
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  Deep forest green as the brand, marigold for anything urgent or scarce (seats
+  left, time remaining). Indian edtech is a sea of blue and purple; green reads
+  as trust rather than tech, which is the exact problem the research said we
+  have to solve.
+
+  Every colour is a token. Never hard-code a hex in a component — dark mode is
+  a token swap and a literal will simply not follow.
+*/
+
+:root {
+  --paper: #faf9f6;
+  --surface: #ffffff;
+  --surface-2: #f3f1ec;
+  --surface-3: #e9e6df;
+
+  --ink: #16201c;
+  --ink-soft: #56635d;
+  --ink-faint: #8b968f;
+
+  --line: #e2ded5;
+  --line-strong: #c9c3b6;
+
+  --brand: #1b4d3e;
+  --brand-hover: #143c30;
+  --brand-ink: #ffffff;
+  --brand-tint: #e7efe9;
+
+  --accent: #c67c0a;
+  --accent-tint: #fdf3e0;
+
+  --danger: #a3231f;
+  --danger-tint: #fbeceb;
+
+  --live: #cf2b1d;
+
+  --radius: 0.625rem;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --paper: #101512;
+    --surface: #18201c;
+    --surface-2: #202a25;
+    --surface-3: #2a352f;
+
+    --ink: #e8ede9;
+    --ink-soft: #a3b0a8;
+    --ink-faint: #74807a;
+
+    --line: #2b352f;
+    --line-strong: #3d4a43;
+
+    --brand: #5ec39b;
+    --brand-hover: #74d0ac;
+    --brand-ink: #0c1512;
+    --brand-tint: #172a23;
+
+    --accent: #e8a838;
+    --accent-tint: #2a2115;
+
+    --danger: #e8776f;
+    --danger-tint: #2b1917;
+
+    --live: #f2645a;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@theme inline {
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
+
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
+  --color-brand-ink: var(--brand-ink);
+  --color-brand-tint: var(--brand-tint);
+
+  --color-accent: var(--accent);
+  --color-accent-tint: var(--accent-tint);
+
+  --color-danger: var(--danger);
+  --color-danger-tint: var(--danger-tint);
+
+  --color-live: var(--live);
+
+  --font-sans: var(--font-ui), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-display), Georgia, serif;
+  --font-mono: var(--font-mono-ui), ui-monospace, monospace;
+
+  --radius-card: var(--radius);
+}
+
+@layer base {
+  html {
+    /* dvh, never vh — mobile browser toolbars otherwise clip the last row of
+       every screen, which is the most common mobile layout bug there is. */
+    min-height: 100dvh;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    min-height: 100dvh;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+  }
+
+  /* Every interactive element must show where the keyboard is. */
+  :focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+
+  /* Tap targets. 44px is the floor on touch devices. */
+  @media (pointer: coarse) {
+    button,
+    a[role="button"],
+    input[type="submit"],
+    select {
+      min-height: 44px;
+    }
+  }
+
+  ::selection {
+    background: var(--brand-tint);
+    color: var(--ink);
+  }
+}
+
+@layer utilities {
+  /* iPhone notch and home bar. */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
